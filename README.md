@@ -1,108 +1,100 @@
 # Inbox Triage Agent
 
-An intelligent AI-powered agent that autonomously triages inbox files using Large Language Models (LLMs). Built with Spring Boot and Spring AI, this agentic application leverages Groq's fast inference to analyze, prioritize, and organize text files in your inbox directory.
+An agentic AI system built in Java that autonomously monitors an inbox folder, reads unstructured text files, and classifies each as HIGH, MEDIUM, or LOW priority — using LLM reasoning with zero hardcoded rules.
 
-## 🚀 Features
+Built to understand the foundation of agentic systems: how LLMs use tools to interact with the real world.
 
-- **Autonomous Operation**: AI agent that works independently to process inbox files
-- **Intelligent Triage**: Uses LLM to analyze file content and assign priorities (HIGH, MEDIUM, LOW)
-- **Tool-Based Architecture**: Implements AI tools for file system interactions (list, read, rename)
-- **Fast Inference**: Powered by Groq's Llama 3.3 70B model for quick processing
-- **REST API**: Simple endpoints to trigger triage operations
-- **Configurable**: Easily adjust inbox path and AI settings
+## The problem it solves
 
-## 🏗️ Architecture
+Traditional inbox automation relies on keyword matching or rule engines:
+- "If subject contains URGENT → mark HIGH"
+- Brittle. Misses context. Breaks constantly.
 
-This agentic application follows a tool-calling pattern where the LLM acts as the reasoning engine:
+This agent reads the actual content and understands intent — the same way a human would. A message about a production outage is HIGH not because it contains a keyword, but because the LLM understands what a production outage means.
 
-1. **Perception**: Lists unprocessed .txt files in the inbox directory
-2. **Analysis**: Reads file contents and determines priority using LLM reasoning
-3. **Action**: Renames files with priority prefixes (HIGH_, MEDIUM_, LOW_)
-4. **Feedback**: Provides status updates on triaged files
+## How it works
+```
+User: "Triage my inbox"
+         ↓
+   LLM (Llama 3.2 via Groq)
+         ↓ ReAct loop — think, act, observe, repeat
+   ┌─────────────────────────────────────┐
+   │  Tool 1: listFiles()                │ → scans inbox, returns file paths
+   │  Tool 2: readFile(path)             │ → reads raw file content
+   │  Tool 3: markFile(path, priority)   │ → renames file with priority label
+   └─────────────────────────────────────┘
+         ↓
+   Final summary with reasoning per file
+```
 
-The agent uses Spring AI's tool annotation system to expose file operations as callable functions to the LLM.
+The LLM decides which tools to call, in what order, and what priority to assign — based purely on understanding the content. No orchestration logic written.
 
-## 🛠️ Tech Stack
+## Architecture decisions and tradeoffs
 
-- **Java 17** - Modern Java runtime
-- **Spring Boot 3.4.5** - Framework for building the application
-- **Spring AI** - AI integration framework
-- **Groq API** - Fast LLM inference via OpenAI-compatible interface
-- **Maven** - Dependency management and build tool
+**Why Spring AI over LangChain4j?**
+Spring AI 1.0 has first-class tool calling support with `@Tool` annotation. Fits naturally into existing Spring Boot microservice patterns. LangChain4j is good but adds complexity for simple tool calling use cases.
 
-## 📋 Prerequisites
+**Why Groq over OpenAI?**
+Groq's LPU hardware runs Llama 3.2 at ~800 tokens/second vs ~50 on GPU. For a triage agent processing many files, inference speed directly impacts throughput. Cost is also zero at current free tier.
 
-- Java 17 or higher
-- Maven 3.6+
-- Groq API key (sign up at [groq.com](https://groq.com))
+**Why three separate tools instead of one?**
+Single responsibility. `listFiles` has no business reading content. `readFile` has no business making priority decisions. Separation makes each tool testable independently and lets the LLM compose them as needed. If reading fails, listing still works.
 
-## 🚀 Installation & Setup
+**The security boundary**
+Tools are the only way the LLM can interact with the filesystem. It cannot list, read, or rename anything that isn't explicitly exposed as a `@Tool`. The LLM has no direct filesystem access — Java code does, and Java code is the gatekeeper.
 
-1. **Clone the repository**
-   ```bash
-   git clone https://github.com/jaswanthg-ai/inbox-triage-agent.git
-   cd inbox-triage-agent
-   ```
+## What this demonstrates
 
-2. **Configure API Key**
-   Edit `src/main/resources/application.properties`:
-   ```properties
-   spring.ai.openai.api-key=YOUR_GROQ_API_KEY
-   ```
+- **Tool calling pattern** — how LLMs interact with real systems through structured function calls
+- **ReAct loop** — the think-act-observe cycle that makes an LLM an agent rather than a chatbot
+- **Tool design** — single responsibility, clear descriptions, controlled scope
+- **Agentic security model** — LLM capabilities are bounded by the tools you expose, nothing more
 
-3. **Set Inbox Path** (optional)
-   ```properties
-   inbox.path=/path/to/your/inbox
-   ```
+## Tech stack
 
-4. **Build and Run**
-   ```bash
-   mvn spring-boot:run
-   ```
+| Layer | Technology |
+|---|---|
+| Language | Java 17 |
+| Framework | Spring Boot 3.3.4 |
+| AI integration | Spring AI 1.0 |
+| LLM | Llama 3.2 via Groq API |
+| Build | Maven |
 
-The application will start on `http://localhost:8080`
-
-## 📖 Usage
-
-### Manual Triage
-Place .txt files in your inbox directory and call the triage endpoint:
-
+## Run it locally
 ```bash
-curl http://localhost:8080/triage
+# Create inbox and test files
+mkdir C:\inbox
+echo "Production server is down. Users cannot login. Payments failing." > C:\inbox\alert1.txt
+echo "Please update the team wiki page when you get a chance." > C:\inbox\task1.txt
+echo "Team lunch is moved to Friday instead of Thursday." > C:\inbox\info1.txt
+```
+```properties
+# application.properties
+spring.ai.openai.api-key=YOUR_GROQ_KEY
+spring.ai.openai.base-url=https://api.groq.com/openai
+spring.ai.openai.chat.options.model=llama-3.2-11b-text-preview
+```
+```bash
+mvn spring-boot:run
 ```
 
-### Agentic Workflow
-The AI agent will:
-1. Scan for .txt files
-2. Read and analyze content
-3. Assign priorities based on content analysis
-4. Rename files with priority indicators
-
-Example output:
+## Sample output
 ```
-Marked as HIGH → HIGH_urgent_meeting.txt
-Marked as MEDIUM → MEDIUM_project_update.txt
-Marked as LOW → LOW_newsletter.txt
+AGENT: I've triaged all 3 files in your inbox:
+
+HIGH_alert1.txt   — Production server down with payment failures. 
+                    Requires immediate attention.
+
+MEDIUM_task1.txt  — Wiki update request. Important but not time-critical. 
+                    Can be handled today or tomorrow.
+
+LOW_info1.txt     — Schedule change notification. 
+                    Informational only, no action required.
 ```
 
-## 🔧 Configuration
+## What's next
 
-| Property | Default | Description |
-|----------|---------|-------------|
-| `spring.ai.openai.api-key` | - | Your Groq API key |
-| `spring.ai.openai.base-url` | https://api.groq.com/openai | Groq API endpoint |
-| `spring.ai.openai.chat.options.model` | llama-3.3-70b-versatile | LLM model to use |
-| `inbox.path` | ./inbox | Path to inbox directory |
-
-## 📡 API Endpoints
-
-- `GET /triage` - Trigger inbox triage operation
-- `GET /actuator/health` - Health check endpoint
-
-## 🤝 Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-## 📄 License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
+- Add email ingestion tool — fetch unread emails, triage them the same way
+- Add notification tool — send Slack message for HIGH priority items automatically  
+- Move tools to a separate MCP server — any agent can then use the same inbox tools
+- Add human-in-the-loop — HIGH priority items require human confirmation before marking
